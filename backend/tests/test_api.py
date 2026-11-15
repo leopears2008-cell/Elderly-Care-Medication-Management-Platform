@@ -125,3 +125,202 @@ def test_brute_force_passcode_lockout():
         json={"profile_id": profile_id, "passcode": "998877", "role": "ELDER"},
     )
     assert locked_res.status_code == 429
+
+
+def test_emergency_sos_trigger_and_places():
+    # 1. Create Profile
+    res = client.post(
+        "/api/v1/profiles",
+        json={
+            "elder_name": "Karpagam Ammal",
+            "age": 82,
+            "blood_group": "AB+",
+            "passcode": "334455",
+            "caregiver_emails": ["caregiver@example.com"],
+        },
+    )
+    assert res.status_code == 201
+    profile_id = res.json()["profile_id"]
+
+    # 2. Login
+    auth_res = client.post(
+        "/api/v1/auth/passcode",
+        json={"profile_id": profile_id, "passcode": "334455", "role": "ELDER"},
+    )
+    token = auth_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 3. Trigger SOS
+    sos_res = client.post(
+        "/api/v1/sos",
+        headers=headers,
+        json={
+            "emergency_type": "FALL_DETECTED",
+            "note": "Fell near bathroom, pain in knee",
+            "current_latitude": 13.0827,
+            "current_longitude": 80.2707,
+        },
+    )
+    assert sos_res.status_code == 201
+    sos_data = sos_res.json()
+    assert sos_data["status"] == "TRIGGERED"
+    assert sos_data["caregivers_notified_count"] == 1
+    assert "https://www.google.com/maps/dir/" in sos_data["emergency_directions_url"]
+
+    # 4. Get SOS history
+    hist_res = client.get("/api/v1/sos", headers=headers)
+    assert hist_res.status_code == 200
+    assert len(hist_res.json()) >= 1
+
+    # 5. Get Emergency places
+    places_res = client.get("/api/v1/emergency/places?lat=13.0827&lng=80.2707", headers=headers)
+    assert places_res.status_code == 200
+    places = places_res.json()
+    assert "pharmacy" in places["nearby_pharmacies_url"]
+    assert "hospital" in places["nearby_hospitals_url"]
+
+
+def test_vitals_logging_and_assessment():
+    res = client.post(
+        "/api/v1/profiles",
+        json={
+            "elder_name": "Subramanian V",
+            "age": 76,
+            "blood_group": "O-",
+            "passcode": "778899",
+            "caregiver_emails": ["doctor_son@example.com"],
+        },
+    )
+    profile_id = res.json()["profile_id"]
+
+    auth_res = client.post(
+        "/api/v1/auth/passcode",
+        json={"profile_id": profile_id, "passcode": "778899", "role": "CARETAKER"},
+    )
+    token = auth_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Log normal vitals
+    vitals_res = client.post(
+        "/api/v1/vitals",
+        headers=headers,
+        json={
+            "systolic_bp": 120,
+            "diastolic_bp": 80,
+            "heart_rate": 72,
+            "blood_glucose_mg_dl": 105.0,
+            "oxygen_saturation_spo2": 98,
+            "elder_note": "Morning reading after mild walk",
+        },
+    )
+    assert vitals_res.status_code == 201
+    assert "Normal" in vitals_res.json()["status_assessment"]
+
+    # Log elevated vitals
+    elev_res = client.post(
+        "/api/v1/vitals",
+        headers=headers,
+        json={
+            "systolic_bp": 155,
+            "diastolic_bp": 95,
+            "oxygen_saturation_spo2": 90,
+        },
+    )
+    assert elev_res.status_code == 201
+    elev_data = elev_res.json()
+    assert "High Systolic BP" in elev_data["status_assessment"]
+    assert "Low SpO2" in elev_data["status_assessment"]
+
+    # History
+    history_res = client.get("/api/v1/vitals", headers=headers)
+    assert history_res.status_code == 200
+    assert len(history_res.json()) == 2
+
+
+def test_ai_interaction_check_and_side_effects():
+    res = client.post(
+        "/api/v1/profiles",
+        json={
+            "elder_name": "Shantha G",
+            "age": 71,
+            "blood_group": "A+",
+            "passcode": "445566",
+            "caregiver_emails": ["caregiver2@example.com"],
+        },
+    )
+    profile_id = res.json()["profile_id"]
+
+    auth_res = client.post(
+        "/api/v1/auth/passcode",
+        json={"profile_id": profile_id, "passcode": "445566", "role": "ELDER"},
+    )
+    token = auth_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Interaction Check
+    inter_res = client.post(
+        "/api/v1/ai/interaction-check",
+        headers=headers,
+        json={
+            "medication_name": "Atorvastatin",
+            "existing_medications": ["Amlodipine", "Metformin"],
+        },
+    )
+    assert inter_res.status_code == 200
+    inter_data = inter_res.json()
+    assert "foods_to_avoid" in inter_data
+    assert "elder_friendly_guidance" in inter_data
+
+    # Side Effects Explanation
+    side_res = client.post(
+        "/api/v1/ai/side-effects",
+        headers=headers,
+        json={"medication_name": "Metformin"},
+    )
+    assert side_res.status_code == 200
+    side_data = side_res.json()
+    assert "common_sensations" in side_data
+    assert "when_to_alert_caregiver" in side_data
+
+
+def test_medication_refill_tracking():
+    res = client.post(
+        "/api/v1/profiles",
+        json={
+            "elder_name": "Govindarajulu N",
+            "age": 80,
+            "blood_group": "B-",
+            "passcode": "556677",
+            "caregiver_emails": ["daughter_nurse@example.com"],
+        },
+    )
+    profile_id = res.json()["profile_id"]
+
+    auth_res = client.post(
+        "/api/v1/auth/passcode",
+        json={"profile_id": profile_id, "passcode": "556677", "role": "CARETAKER"},
+    )
+    token = auth_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Add medicine with 3 pills left
+    med_res = client.post(
+        "/api/v1/medications",
+        headers=headers,
+        json={
+            "name": "Thyroxine",
+            "dosage": "50mcg",
+            "scheduled_time": "06:30",
+            "instructions": "Empty stomach morning",
+            "stock_remaining": 3,
+        },
+    )
+    assert med_res.status_code == 201
+
+    # Check refills endpoint
+    refill_res = client.get("/api/v1/medications/refills", headers=headers)
+    assert refill_res.status_code == 200
+    refills = refill_res.json()
+    assert len(refills) == 1
+    assert refills[0]["is_low_stock"] is True
+    assert refills[0]["refill_urgency"] == "LOW_STOCK"

@@ -70,6 +70,90 @@ class AIPrescriptionParseResponse(BaseModel):
     ai_source: Literal["gemini-2.5-flash", "deterministic-fallback"]
 
 
+class InteractionCheckRequest(BaseModel):
+    medication_name: str = Field(..., min_length=2, max_length=150)
+    existing_medications: List[str] = Field(default_factory=list)
+
+
+class InteractionCheckResponse(BaseModel):
+    has_interaction: bool
+    severity: str
+    adverse_drug_conflicts: List[str]
+    foods_to_avoid: List[str]
+    elder_friendly_guidance: str
+    ai_source: str
+
+
+class SideEffectsRequest(BaseModel):
+    medication_name: str = Field(..., min_length=2, max_length=150)
+
+
+class SideEffectsResponse(BaseModel):
+    medication_name: str
+    common_sensations: List[str]
+    when_to_alert_caregiver: str
+    senior_safety_tip: str
+    ai_source: str
+
+
+class SOSAlertRequest(BaseModel):
+    emergency_type: str = Field(default="GENERAL_EMERGENCY", max_length=50)
+    note: Optional[str] = Field(default=None, max_length=500)
+    current_latitude: Optional[float] = None
+    current_longitude: Optional[float] = None
+
+
+class SOSAlertResponse(BaseModel):
+    alert_id: str
+    profile_id: str
+    elder_name: str
+    emergency_type: str
+    note: Optional[str] = None
+    triggered_at: str
+    caregivers_notified_count: int
+    emergency_directions_url: str
+    status: str = "TRIGGERED"
+
+
+class VitalsLogRequest(BaseModel):
+    systolic_bp: Optional[int] = Field(default=None, ge=50, le=250)
+    diastolic_bp: Optional[int] = Field(default=None, ge=30, le=150)
+    heart_rate: Optional[int] = Field(default=None, ge=30, le=220)
+    blood_glucose_mg_dl: Optional[float] = Field(default=None, ge=20.0, le=600.0)
+    oxygen_saturation_spo2: Optional[int] = Field(default=None, ge=50, le=100)
+    elder_note: Optional[str] = Field(default=None, max_length=300)
+
+
+class VitalsLogResponse(BaseModel):
+    id: str
+    profile_id: str
+    systolic_bp: Optional[int] = None
+    diastolic_bp: Optional[int] = None
+    heart_rate: Optional[int] = None
+    blood_glucose_mg_dl: Optional[float] = None
+    oxygen_saturation_spo2: Optional[int] = None
+    elder_note: Optional[str] = None
+    logged_at: str
+    status_assessment: str
+
+
+class RefillAlertResponse(BaseModel):
+    medication_id: str
+    name: str
+    dosage: str
+    stock_remaining: int
+    is_low_stock: bool
+    days_left_approx: int
+    refill_urgency: Literal["NORMAL", "LOW_STOCK", "CRITICAL_EMPTY"]
+
+
+class EmergencyPlacesResponse(BaseModel):
+    nearby_pharmacies_url: str
+    nearby_hospitals_url: str
+    emergency_directions_url: str
+    emergency_hotline: str = "112 / 911"
+
+
 # ── Classic User Auth Models ──────────────────────────────────────────────────
 class UserCreate(BaseModel):
     model_config = {"strict": True}
