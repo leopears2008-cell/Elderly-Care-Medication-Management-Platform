@@ -1,383 +1,473 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { authApi, medicationsApi, type User, type Medication } from '@/lib/api';
-import ElderDoseCard from '@/components/ElderDoseCard';
-import PrescriptionScanner from '@/components/PrescriptionScanner';
-import AppointmentManager from '@/components/AppointmentManager';
+import React, { useState } from 'react';
 
-type Role = 'elder' | 'caretaker' | 'family';
-type Tab = 'medications' | 'appointments' | 'scanner' | 'analytics';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-export default function Home() {
-  const [passcode, setPasscode] = useState('');
-  const [email, setEmail] = useState('');
-  const [user, setUser] = useState<User | null>(null);
-  const [role, setRole] = useState<Role>('elder');
-  const [medications, setMedications] = useState<Medication[]>([]);
-  const [activeTab, setActiveTab] = useState<Tab>('medications');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [loginStep, setLoginStep] = useState<'email' | 'passcode'>('email');
+interface DoseLog {
+  id: string;
+  medication_name: string;
+  dosage: string;
+  scheduled_time: string;
+  instructions: string;
+  status: 'PENDING' | 'TAKEN' | 'SNOOZED' | 'MISSED';
+  elder_note?: string | null;
+}
 
-  // Check for existing session on mount
-  useEffect(() => {
-    const token = localStorage.getItem('access_token');
-    const savedUser = localStorage.getItem('user');
-    if (token && savedUser) {
-      try {
-        const u = JSON.parse(savedUser) as User;
-        setUser(u);
-        setRole(u.role as Role);
-      } catch {}
+interface Appointment {
+  id: string;
+  doctor_name: string;
+  specialty: string;
+  appointment_time: string;
+  location: string;
+  google_calendar_url: string;
+}
+
+export default function SushrutaCareApp() {
+  const [token, setToken] = useState<string | null>(null);
+  const [profileId, setProfileId] = useState<string>('');
+  const [passcode, setPasscode] = useState<string>('');
+  const [role, setRole] = useState<'ELDER' | 'CARETAKER' | 'FAMILY'>('ELDER');
+  const [elderName, setElderName] = useState<string>('');
+  const [adherenceRate, setAdherenceRate] = useState<number>(100);
+  const [doses, setDoses] = useState<DoseLog[]>([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [statusBanner, setStatusBanner] = useState<string>('');
+  const [errorBanner, setErrorBanner] = useState<string>('');
+  const [loading, setLoading] = useState<boolean>(false);
+
+  // Quick Setup / Medication / AI states
+  const [newElderName, setNewElderName] = useState('');
+  const [newElderAge, setNewElderAge] = useState(72);
+  const [newCareEmail, setNewCareEmail] = useState('');
+  const [newPasscode, setNewPasscode] = useState('');
+  const [rxInput, setRxInput] = useState('');
+  const [aiWarning, setAiWarning] = useState<string | null>(null);
+
+  const speakAloud = (text: string) => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.85;
+      window.speechSynthesis.speak(utterance);
     }
-  }, []);
+  };
 
-  // Load medications when user is set
-  useEffect(() => {
-    if (user) {
-      medicationsApi.list().then(setMedications).catch(console.error);
-    }
-  }, [user]);
+  const fetchDashboard = async (jwtToken: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/dashboard`, {
+      headers: { Authorization: `Bearer ${jwtToken}` },
+    });
+    if (!res.ok) throw new Error('Failed to load dashboard');
+    const data = await res.json();
+    setElderName(data.elder_name);
+    setAdherenceRate(data.adherence_rate_percent);
+    setDoses(data.today_doses);
+    setAppointments(data.appointments);
+  };
 
-  const handleLogin = async () => {
+  const handleCreateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
     setLoading(true);
-    setError('');
+    setErrorBanner('');
     try {
-      const res = await authApi.login(email, passcode);
-      localStorage.setItem('access_token', res.access_token);
-      localStorage.setItem('user', JSON.stringify(res.user));
-      setUser(res.user);
-      setRole(res.user.role as Role);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Login failed. Please check your credentials.');
+      const res = await fetch(`${API_BASE}/api/v1/profiles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          elder_name: newElderName,
+          age: Number(newElderAge),
+          blood_group: 'O+',
+          passcode: newPasscode,
+          caregiver_emails: [newCareEmail],
+          preferred_language: 'en-IN',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Could not create profile');
+      setProfileId(data.profile_id);
+      setPasscode(newPasscode);
+      setStatusBanner(`Created Care Circle! Profile ID: ${data.profile_id}`);
+    } catch (err: any) {
+      setErrorBanner(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('user');
-    setUser(null);
-    setPasscode('');
-    setEmail('');
-  };
-
-  const handleMedicationTaken = async (med: Medication) => {
+  const handlePasscodeLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setErrorBanner('');
     try {
-      const now = new Date().toISOString();
-      await medicationsApi.logAdherence(med.id, 'taken', now);
-      setMedications(prev => prev.map(m => m.id === med.id ? { ...m, adherence_percent: 100 } : m));
-    } catch (e) {
-      console.error('Failed to log adherence', e);
+      const res = await fetch(`${API_BASE}/api/v1/auth/passcode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_id: profileId, passcode, role }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Invalid passcode');
+      setToken(data.access_token);
+      await fetchDashboard(data.access_token);
+      setStatusBanner(`Logged in as ${data.role} for ${data.elder_name}`);
+    } catch (err: any) {
+      setErrorBanner(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleMedicationMissed = async (med: Medication) => {
+  const handleDoseAction = async (
+    logId: string,
+    status: 'TAKEN' | 'SNOOZED',
+    elderNote?: string
+  ) => {
+    if (!token) return;
+    setLoading(true);
     try {
-      const now = new Date().toISOString();
-      await medicationsApi.logAdherence(med.id, 'missed', now);
-    } catch (e) {
-      console.error('Failed to log adherence', e);
+      const res = await fetch(`${API_BASE}/api/v1/adherence/${logId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status, elder_note: elderNote }),
+      });
+      if (!res.ok) throw new Error('Could not update dose');
+      await fetchDashboard(token);
+      const feedback =
+        status === 'TAKEN'
+          ? 'Medication marked as taken!'
+          : 'Dose delayed by 30 minutes. Caretakers notified with your reason.';
+      setStatusBanner(feedback);
+      speakAloud(feedback);
+    } catch (err: any) {
+      setErrorBanner(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
-  // ── Passcode Gate ─────────────────────────────────────────────────────────
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-950 to-blue-900 flex items-center justify-center p-4">
-        <div
-          className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-sm"
-          role="main"
-          aria-label="SushrutaCare AI Login"
-        >
-          {/* Logo */}
-          <div className="text-center mb-8">
-            <div className="text-6xl mb-3" aria-hidden="true">🏥</div>
-            <h1 className="text-3xl font-bold text-blue-900">SushrutaCare</h1>
-            <p className="text-gray-600 text-lg mt-1">AI-Powered Care</p>
-          </div>
+  const handleGeminiSmartAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+    setLoading(true);
+    setErrorBanner('');
+    try {
+      const scanRes = await fetch(`${API_BASE}/api/v1/ai/scan-prescription`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          raw_prescription_text: rxInput,
+          existing_medications: doses.map((d) => d.medication_name),
+        }),
+      });
+      const parsed = await scanRes.json();
+      if (!scanRes.ok) throw new Error(parsed.detail || 'AI parse failed');
+      setAiWarning(parsed.interaction_warning);
 
-          {loginStep === 'email' ? (
-            <div>
-              <label
-                htmlFor="email-input"
-                className="block text-xl font-semibold text-gray-800 mb-3"
-              >
-                Email Address
-              </label>
-              <input
-                id="email-input"
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && setLoginStep('passcode')}
-                placeholder="your@email.com"
-                className="w-full border-2 border-gray-300 rounded-xl px-4 py-4 text-xl focus:border-blue-600 focus:outline-none"
-                aria-required="true"
-                autoComplete="email"
-              />
-              <button
-                onClick={() => setLoginStep('passcode')}
-                disabled={!email}
-                className="w-full mt-5 bg-blue-800 text-white text-xl font-bold rounded-xl py-4 touch-target hover:bg-blue-700 disabled:opacity-50 transition-colors"
-                aria-label="Continue to passcode entry"
-              >
-                Continue →
-              </button>
-            </div>
-          ) : (
-            <div>
-              <button
-                onClick={() => setLoginStep('email')}
-                className="text-blue-700 text-base mb-4 flex items-center gap-1 hover:underline"
-                aria-label="Go back to email entry"
-              >
-                ← {email}
-              </button>
-              <label
-                htmlFor="passcode-input"
-                className="block text-xl font-semibold text-gray-800 mb-3"
-              >
-                Enter Your Passcode
-              </label>
-              <input
-                id="passcode-input"
-                type="password"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                maxLength={12}
-                value={passcode}
-                onChange={e => setPasscode(e.target.value.replace(/\D/g, ''))}
-                onKeyDown={e => e.key === 'Enter' && handleLogin()}
-                placeholder="••••••"
-                className="w-full border-2 border-gray-300 rounded-xl px-4 py-4 text-3xl text-center tracking-widest focus:border-blue-600 focus:outline-none"
-                aria-required="true"
-                autoComplete="current-password"
-                autoFocus
-              />
-
-              {/* Large PIN pad for seniors */}
-              <div
-                className="grid grid-cols-3 gap-3 mt-5"
-                role="group"
-                aria-label="Numeric keypad"
-              >
-                {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((key, i) => (
-                  <button
-                    key={i}
-                    onClick={() => {
-                      if (key === '⌫') setPasscode(p => p.slice(0, -1));
-                      else if (key) setPasscode(p => (p + key).slice(0, 12));
-                    }}
-                    disabled={!key}
-                    className={`h-16 rounded-xl text-2xl font-bold transition-colors touch-target
-                      ${key === '⌫' ? 'bg-red-100 text-red-700 hover:bg-red-200' : 
-                        key ? 'bg-gray-100 text-gray-900 hover:bg-gray-200 active:bg-gray-300' : 
-                        'invisible'}`}
-                    aria-label={key === '⌫' ? 'Delete last digit' : key ? `Digit ${key}` : ''}
-                  >
-                    {key}
-                  </button>
-                ))}
-              </div>
-
-              {error && (
-                <p role="alert" className="mt-4 text-red-700 text-center text-lg font-medium">
-                  ⚠️ {error}
-                </p>
-              )}
-
-              <button
-                onClick={handleLogin}
-                disabled={passcode.length < 4 || loading}
-                className="w-full mt-5 bg-green-700 text-white text-xl font-bold rounded-xl py-4 touch-target hover:bg-green-600 disabled:opacity-50 transition-colors"
-                aria-label="Sign in"
-              >
-                {loading ? '⏳ Signing in...' : '✓ Sign In'}
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ── Elder View ────────────────────────────────────────────────────────────
-  if (role === 'elder') {
-    const speakAll = () => {
-      if (!window.speechSynthesis) return;
-      window.speechSynthesis.cancel();
-      const text = medications.length === 0
-        ? 'You have no medications scheduled for today.'
-        : `You have ${medications.length} medications. ` + medications
-            .map(m => `${m.name}, ${m.dosage}, at ${m.dose_times.join(' and ')}.`)
-            .join(' ');
-      const utt = new SpeechSynthesisUtterance(text);
-      utt.rate = 0.85;
-      utt.pitch = 1;
-      utt.volume = 1;
-      window.speechSynthesis.speak(utt);
-    };
-
-    return (
-      <div className="min-h-screen bg-gray-50 senior-mode">
-        {/* Header */}
-        <header className="bg-blue-900 text-white px-6 py-5">
-          <div className="max-w-2xl mx-auto flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold">🏥 SushrutaCare AI</h1>
-              <p className="text-blue-200 text-xl">Hello, {user.name} 👋</p>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="bg-blue-700 hover:bg-blue-600 text-white px-5 py-3 rounded-xl text-lg font-semibold touch-target transition-colors"
-              aria-label="Sign out"
-            >
-              Sign Out
-            </button>
-          </div>
-        </header>
-
-        <div className="max-w-2xl mx-auto px-6 py-8">
-          {/* Speak All button */}
-          <button
-            onClick={speakAll}
-            className="w-full bg-yellow-500 hover:bg-yellow-400 text-black text-2xl font-bold py-5 rounded-2xl touch-target mb-8 flex items-center justify-center gap-3 transition-colors"
-            aria-label="Read all medications aloud"
-          >
-            🔊 Read My Medications Aloud
-          </button>
-
-          <h2 className="text-2xl font-bold text-gray-900 mb-5">
-            Today&apos;s Medications ({medications.length})
-          </h2>
-
-          {medications.length === 0 ? (
-            <div className="bg-white rounded-2xl p-8 text-center shadow-sm">
-              <p className="text-2xl text-gray-600">✅ No medications scheduled</p>
-            </div>
-          ) : (
-            <div className="space-y-5">
-              {medications.map(med => (
-                <ElderDoseCard
-                  key={med.id}
-                  medication={med}
-                  onTaken={() => handleMedicationTaken(med)}
-                  onMissed={() => handleMedicationMissed(med)}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ── Caretaker / Family View ───────────────────────────────────────────────
-  const tabs: { key: Tab; label: string; icon: string }[] = [
-    { key: 'medications', label: 'Medications', icon: '💊' },
-    { key: 'appointments', label: 'Appointments', icon: '📅' },
-    { key: 'scanner', label: 'AI Scanner', icon: '🔬' },
-    { key: 'analytics', label: 'Analytics', icon: '📊' },
-  ];
+      const addRes = await fetch(`${API_BASE}/api/v1/medications`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: parsed.medication_name,
+          dosage: parsed.dosage,
+          scheduled_time: parsed.scheduled_time,
+          instructions: parsed.elder_friendly_summary,
+          stock_remaining: 30,
+        }),
+      });
+      if (!addRes.ok) throw new Error('Failed to save parsed medication');
+      setRxInput('');
+      await fetchDashboard(token);
+      setStatusBanner(`Gemini added ${parsed.medication_name} (${parsed.dosage})`);
+    } catch (err: any) {
+      setErrorBanner(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-blue-900 text-white px-6 py-4 shadow-lg">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">🏥 SushrutaCare AI</h1>
-            <p className="text-blue-200">Caretaker Dashboard — {user.name}</p>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="bg-blue-700 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-base font-semibold touch-target transition-colors"
-            aria-label="Sign out"
-          >
-            Sign Out
-          </button>
-        </div>
-      </header>
+    <main className="min-h-screen bg-slate-50 p-4 text-slate-950 md:p-8">
+      <div className="mx-auto max-w-5xl space-y-6">
+        <header className="rounded-2xl border-4 border-slate-900 bg-white p-6 shadow-sm">
+          <h1 className="text-3xl font-extrabold tracking-tight md:text-4xl">
+            SushrutaCare AI — Elderly Care & Medication Circle
+          </h1>
+          <p className="mt-2 text-lg font-medium text-slate-700">
+            Passcode-protected shared ecosystem keeping seniors in control of their daily health.
+          </p>
+        </header>
 
-      {/* Tabs */}
-      <nav aria-label="Dashboard sections" className="bg-white border-b border-gray-200 shadow-sm">
-        <div className="max-w-6xl mx-auto px-6 flex gap-1 overflow-x-auto">
-          {tabs.map(tab => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              aria-current={activeTab === tab.key ? 'page' : undefined}
-              className={`px-5 py-4 text-base font-semibold whitespace-nowrap border-b-4 transition-colors touch-target
-                ${activeTab === tab.key
-                  ? 'border-blue-700 text-blue-800'
-                  : 'border-transparent text-gray-600 hover:text-blue-700 hover:border-blue-300'
-                }`}
+        <div aria-live="polite" className="space-y-2">
+          {statusBanner && (
+            <div className="rounded-xl border-2 border-emerald-800 bg-emerald-100 p-4 text-lg font-bold text-emerald-950">
+              ✓ {statusBanner}
+            </div>
+          )}
+          {errorBanner && (
+            <div
+              role="alert"
+              className="rounded-xl border-2 border-red-800 bg-red-100 p-4 text-lg font-bold text-red-950"
             >
-              {tab.icon} {tab.label}
-            </button>
-          ))}
+              ⚠️ {errorBanner}
+            </div>
+          )}
         </div>
-      </nav>
 
-      {/* Content */}
-      <div className="max-w-6xl mx-auto px-6 py-8">
-        {activeTab === 'medications' && (
-          <section aria-label="Medications management">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl font-bold text-gray-900">Medications</h2>
-            </div>
-            {medications.length === 0 ? (
-              <p className="text-gray-500 text-lg">No medications added yet.</p>
-            ) : (
-              <div className="grid gap-4 sm:grid-cols-2">
-                {medications.map(med => (
-                  <ElderDoseCard
-                    key={med.id}
-                    medication={med}
-                    onTaken={() => handleMedicationTaken(med)}
-                    onMissed={() => handleMedicationMissed(med)}
+        {!token ? (
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            {/* Step 1: Create Care Circle */}
+            <form
+              onSubmit={handleCreateProfile}
+              className="space-y-4 rounded-2xl border-4 border-slate-900 bg-white p-6"
+            >
+              <h2 className="text-2xl font-bold">1. Create Elder Care Circle</h2>
+              <div>
+                <label htmlFor="elder-name" className="block text-lg font-bold">
+                  Elder Full Name
+                </label>
+                <input
+                  id="elder-name"
+                  required
+                  value={newElderName}
+                  onChange={(e) => setNewElderName(e.target.value)}
+                  className="mt-1 min-h-[52px] w-full rounded-xl border-2 border-slate-900 px-4 text-lg"
+                  placeholder="e.g. Thiru Sundaram"
+                />
+              </div>
+              <div>
+                <label htmlFor="care-email" className="block text-lg font-bold">
+                  Caretaker / Family Alert Email
+                </label>
+                <input
+                  id="care-email"
+                  type="email"
+                  required
+                  value={newCareEmail}
+                  onChange={(e) => setNewCareEmail(e.target.value)}
+                  className="mt-1 min-h-[52px] w-full rounded-xl border-2 border-slate-900 px-4 text-lg"
+                  placeholder="family@example.com"
+                />
+              </div>
+              <div>
+                <label htmlFor="setup-passcode" className="block text-lg font-bold">
+                  Set 6-Digit Care Circle Passcode
+                </label>
+                <input
+                  id="setup-passcode"
+                  pattern="\d{6}"
+                  maxLength={6}
+                  required
+                  value={newPasscode}
+                  onChange={(e) => setNewPasscode(e.target.value)}
+                  className="mt-1 min-h-[52px] w-full rounded-xl border-2 border-slate-900 px-4 text-xl font-bold tracking-widest"
+                  placeholder="482910"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="min-h-[56px] w-full rounded-xl bg-slate-900 px-6 py-3 text-xl font-bold text-white hover:bg-slate-800"
+              >
+                Create Secure Profile
+              </button>
+            </form>
+
+            {/* Step 2: Shared Passcode Access */}
+            <form
+              onSubmit={handlePasscodeLogin}
+              className="space-y-4 rounded-2xl border-4 border-slate-900 bg-white p-6"
+            >
+              <h2 className="text-2xl font-bold">2. Enter Care Circle (Passcode)</h2>
+              <div>
+                <label htmlFor="login-profile-id" className="block text-lg font-bold">
+                  Elder Profile ID
+                </label>
+                <input
+                  id="login-profile-id"
+                  required
+                  value={profileId}
+                  onChange={(e) => setProfileId(e.target.value)}
+                  className="mt-1 min-h-[52px] w-full rounded-xl border-2 border-slate-900 px-4 text-lg"
+                />
+              </div>
+              <div>
+                <label htmlFor="login-passcode" className="block text-lg font-bold">
+                  6-Digit Passcode
+                </label>
+                <input
+                  id="login-passcode"
+                  type="password"
+                  pattern="\d{6}"
+                  maxLength={6}
+                  required
+                  value={passcode}
+                  onChange={(e) => setPasscode(e.target.value)}
+                  className="mt-1 min-h-[52px] w-full rounded-xl border-2 border-slate-900 px-4 text-xl font-bold tracking-widest"
+                />
+              </div>
+              <div>
+                <label htmlFor="login-role" className="block text-lg font-bold">
+                  Select Your Role
+                </label>
+                <select
+                  id="login-role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as any)}
+                  className="mt-1 min-h-[52px] w-full rounded-xl border-2 border-slate-900 bg-white px-4 text-lg font-bold"
+                >
+                  <option value="ELDER">Elderly Individual (High-Contrast Autonomy View)</option>
+                  <option value="CARETAKER">Caretaker (Manage Schedule & AI Scanner)</option>
+                  <option value="FAMILY">Family Member (Monitor Adherence)</option>
+                </select>
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="min-h-[56px] w-full rounded-xl bg-emerald-800 px-6 py-3 text-xl font-bold text-white hover:bg-emerald-900"
+              >
+                Unlock Shared Profile
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border-4 border-slate-900 bg-amber-100 p-6">
+              <div>
+                <h2 className="text-2xl font-extrabold">
+                  Care Profile: {elderName} ({role} MODE)
+                </h2>
+                <p className="text-xl font-bold text-slate-900">
+                  Today&apos;s Medication Adherence: {adherenceRate}%
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setToken(null)}
+                className="min-h-[52px] rounded-xl border-2 border-slate-900 bg-white px-5 py-2 text-lg font-bold"
+              >
+                Switch Role / Lock
+              </button>
+            </section>
+
+            {/* Gemini AI Prescription Scanner (Enabled for ELDER and CARETAKER) */}
+            {role !== 'FAMILY' && (
+              <form
+                onSubmit={handleGeminiSmartAdd}
+                className="space-y-4 rounded-2xl border-4 border-slate-900 bg-white p-6"
+              >
+                <h3 className="text-2xl font-bold">
+                  ✨ Google Gemini 2.5 Flash — Smart Prescription & Interaction Guard
+                </h3>
+                <label htmlFor="rx-input" className="block text-lg font-medium">
+                  Type or paste doctor&apos;s prescription text (e.g., &quot;Metformin 500mg morning after breakfast&quot;):
+                </label>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <input
+                    id="rx-input"
+                    required
+                    value={rxInput}
+                    onChange={(e) => setRxInput(e.target.value)}
+                    placeholder="Amlodipine 5mg at 08:00 after breakfast"
+                    className="min-h-[56px] flex-1 rounded-xl border-2 border-slate-900 px-4 text-lg"
                   />
-                ))}
-              </div>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="min-h-[56px] rounded-xl bg-blue-800 px-6 py-3 text-xl font-bold text-white hover:bg-blue-900"
+                  >
+                    Scan & Schedule with Gemini
+                  </button>
+                </div>
+                {aiWarning && (
+                  <p role="alert" className="rounded-xl bg-amber-200 p-3 text-lg font-bold">
+                    ⚠️ Gemini Interaction Check: {aiWarning}
+                  </p>
+                )}
+              </form>
             )}
-          </section>
-        )}
 
-        {activeTab === 'appointments' && <AppointmentManager />}
-        {activeTab === 'scanner' && <PrescriptionScanner />}
+            {/* Medication Dose Cards */}
+            <section className="space-y-4">
+              <h3 className="text-2xl font-extrabold">Today&apos;s Medication Schedule</h3>
+              {doses.length === 0 ? (
+                <p className="rounded-2xl border-2 border-dashed border-slate-400 bg-white p-8 text-center text-xl font-medium">
+                  No medications scheduled yet. Use the Gemini Prescription Scanner above to add one.
+                </p>
+              ) : (
+                doses.map((dose) => (
+                  <article
+                    key={dose.id}
+                    className="rounded-2xl border-4 border-slate-900 bg-white p-6 shadow-sm"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div>
+                        <span className="rounded-lg bg-slate-900 px-3 py-1 text-lg font-bold text-white">
+                          ⏰ {dose.scheduled_time} — Status: {dose.status}
+                        </span>
+                        <h4 className="mt-2 text-3xl font-extrabold">
+                          {dose.medication_name} ({dose.dosage})
+                        </h4>
+                        <p className="mt-1 text-xl text-slate-800">{dose.instructions}</p>
+                        {dose.elder_note && (
+                          <p className="mt-2 text-lg font-bold text-amber-900">
+                            Elder Note: &ldquo;{dose.elder_note}&rdquo;
+                          </p>
+                        )}
+                      </div>
 
-        {activeTab === 'analytics' && (
-          <section aria-label="Adherence analytics">
-            <h2 className="text-2xl font-bold text-gray-900 mb-6">Adherence Analytics</h2>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="bg-white rounded-2xl shadow-sm p-6 text-center">
-                <p className="text-5xl font-bold text-green-700">
-                  {medications.filter(m => (m.adherence_percent ?? 0) >= 80).length}
-                </p>
-                <p className="text-gray-600 text-lg mt-2">High Adherence (&ge;80%)</p>
-              </div>
-              <div className="bg-white rounded-2xl shadow-sm p-6 text-center">
-                <p className="text-5xl font-bold text-yellow-600">
-                  {medications.filter(m => {
-                    const p = m.adherence_percent ?? 0;
-                    return p >= 50 && p < 80;
-                  }).length}
-                </p>
-                <p className="text-gray-600 text-lg mt-2">Moderate (50–79%)</p>
-              </div>
-              <div className="bg-white rounded-2xl shadow-sm p-6 text-center">
-                <p className="text-5xl font-bold text-red-700">
-                  {medications.filter(m => (m.adherence_percent ?? 0) < 50).length}
-                </p>
-                <p className="text-gray-600 text-lg mt-2">Low Adherence (&lt;50%)</p>
-              </div>
-            </div>
-          </section>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          speakAloud(
+                            `Medication ${dose.medication_name}, ${dose.dosage}. ${dose.instructions}`
+                          )
+                        }
+                        aria-label={`Read ${dose.medication_name} instructions aloud`}
+                        className="min-h-[56px] rounded-xl border-2 border-slate-900 bg-slate-100 px-5 py-3 text-lg font-bold"
+                      >
+                        🔊 Listen Aloud
+                      </button>
+                    </div>
+
+                    {dose.status === 'PENDING' && role !== 'FAMILY' && (
+                      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDoseAction(dose.id, 'TAKEN')}
+                          className="min-h-[60px] rounded-xl bg-emerald-800 px-6 py-3 text-2xl font-extrabold text-white hover:bg-emerald-900"
+                        >
+                          ✓ I Took This Dose
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleDoseAction(
+                              dose.id,
+                              'SNOOZED',
+                              'Having meal late — taking in 30 minutes'
+                            )
+                          }
+                          className="min-h-[60px] rounded-xl border-4 border-slate-900 bg-amber-100 px-6 py-3 text-xl font-bold text-slate-950 hover:bg-amber-200"
+                        >
+                          ⏳ Delay +30m (Notify Care Circle)
+                        </button>
+                      </div>
+                    )}
+                  </article>
+                ))
+              )}
+            </section>
+          </div>
         )}
       </div>
-    </div>
+    </main>
   );
 }
