@@ -6,24 +6,35 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Backend: Pytest ──────────────────────────────────────────────────────────
   backend-tests:
     name: Backend Tests (Pytest)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
 
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://example.supabase.co' }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || 'test-service-key' }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || '' }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || 'test-gemini-key' }}
       JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY || 'test-jwt-secret-key-32-chars-long!' }}
       JWT_ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: 480
+      ACCESS_TOKEN_EXPIRE_MINUTES: "480"
       SMTP_HOST: smtp.gmail.com
-      SMTP_PORT: 587
-      SMTP_USER: ${{ secrets.SMTP_USER || '' }}
-      SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD || '' }}
+      SMTP_PORT: "587"
+      SMTP_USER: ${{ secrets.SMTP_USER || 'test@example.com' }}
+      SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD || 'test-password' }}
       ALLOWED_ORIGINS: http://localhost:3000
+      PYTHONPATH: .
 
     steps:
       - name: Checkout repository
@@ -37,24 +48,25 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
-        working-directory: ./backend
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run Pytest
-        working-directory: ./backend
-        env:
-          PYTHONPATH: .
         run: python -m pytest -v --tb=short
 
   # ── Frontend: Lint + Build ───────────────────────────────────────────────────
   frontend-lint-build:
     name: Frontend Lint & Build (Next.js)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
 
     env:
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://example.supabase.co' }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'test-anon-key' }}
 
     steps:
       - name: Checkout repository
@@ -64,15 +76,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        working-directory: ./frontend
-        run: npm install
+        run: npm ci
 
       - name: Run ESLint
-        working-directory: ./frontend
         run: npm run lint
 
       - name: Build Next.js app
-        working-directory: ./frontend
         run: npm run build
