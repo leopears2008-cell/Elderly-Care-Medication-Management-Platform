@@ -1,3 +1,4 @@
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
@@ -6,6 +7,8 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Monkeypatch bcrypt.__about__ for passlib 1.7.4 compatibility with bcrypt >= 4.0.0
 try:
@@ -20,21 +23,32 @@ except ImportError:
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer()
 
-# Sliding-window brute-force rate limiter: {key: (failed_count, lock_until_epoch)}
+# Brute-force rate limiter: {key: (failed_count, lock_until_epoch)}
 _failed_attempts: Dict[str, Tuple[int, float]] = {}
 MAX_ATTEMPTS = 5
 LOCKOUT_SECONDS = 900  # 15 minutes
 
+_DEFAULT_JWT_SECRET = "change-this-32-char-secret-key-in-prod"
+if settings.JWT_SECRET_KEY == _DEFAULT_JWT_SECRET:
+    logger.warning(
+        "JWT_SECRET_KEY is using the public default value. "
+        "Set a strong JWT_SECRET_KEY environment variable before going live."
+    )
+
 
 def enforce_rate_limit(key: str) -> None:
+    """Raise HTTP 429 while the key is locked; reset the counter once the lock expires."""
     now = time.time()
-    count, lock_until = _failed_attempts.get(key, (0, 0.0))
+    _, lock_until = _failed_attempts.get(key, (0, 0.0))
     if lock_until > now:
         remaining = int(lock_until - now)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Passcode locked due to repeated failures. Try again in {remaining}s.",
         )
+    if lock_until:
+        # Lock has expired: start a fresh window instead of re-locking on the next failure.
+        _failed_attempts.pop(key, None)
 
 
 def register_failed_attempt(key: str) -> None:
@@ -65,32 +79,39 @@ def verify_passcode(plain_passcode: str, hashed_passcode: str) -> bool:
         return bcrypt.checkpw(plain_passcode.encode("utf-8"), hashed_passcode.encode("utf-8"))
 
 
-def create_session_jwt(profile_id: str, role: str, elder_name: str) -> str:
-    exp_minutes = int(settings.ACCESS_TOKEN_EXPIRE_MINUTES) if settings.ACCESS_TOKEN_EXPIRE_MINUTES else 480
-    expire = datetime.now(timezone.utc) + timedelta(minutes=exp_minutes)
-    payload = {
-        "profile_id": profile_id,
-        "sub": profile_id,
-        "role": role,
-        "elder_name": elder_name,
-        "exp": expire,
-    }
+def _access_token_minutes() -> int:
+    return int(settings.ACCESS_TOKEN_EXPIRE_MINUTES) if settings.ACCESS_TOKEN_EXPIRE_MINUTES else 480
+
+
+def _encode_jwt(payload: dict) -> str:
     token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
     if isinstance(token, bytes):
         token = token.decode("utf-8")
     return token
 
 
+def create_session_jwt(profile_id: str, role: str, elder_name: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=_access_token_minutes())
+    return _encode_jwt(
+        {
+            "profile_id": profile_id,
+            "sub": profile_id,
+            "role": role,
+            "elder_name": elder_name,
+            "exp": expire,
+        }
+    )
+
+
 def get_current_session(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> dict:
     try:
-        payload = jwt.decode(
+        return jwt.decode(
             credentials.credentials,
             settings.JWT_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM],
         )
-        return payload
     except jwt.PyJWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -119,15 +140,11 @@ def decode_token(token: str) -> dict:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    exp_minutes = int(settings.ACCESS_TOKEN_EXPIRE_MINUTES) if settings.ACCESS_TOKEN_EXPIRE_MINUTES else 480
     expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=exp_minutes)
+        expires_delta or timedelta(minutes=_access_token_minutes())
     )
     to_encode.update({"exp": expire})
-    token = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
-    if isinstance(token, bytes):
-        token = token.decode("utf-8")
-    return token
+    return _encode_jwt(to_encode)
 
 
 def get_current_user(
