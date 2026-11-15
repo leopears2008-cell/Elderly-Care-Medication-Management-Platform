@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: #1a3a5c;
+  --color-primary-light: #2563eb;
+  --color-accent: #15803d;
+  --color-danger: #b91c1c;
+  --color-warning: #b45309;
+  --font-size-base: 18px;
+  --font-size-large: 22px;
+  --font-size-xl: 28px;
+  --min-touch-target: 48px;
+}
+
+html {
+  font-size: var(--font-size-base);
+}
+
+body {
+  background-color: #f9fafb;
+  color: #111827;
+  line-height: 1.6;
+}
+
+/* WCAG AAA — minimum 7:1 contrast for senior mode */
+.senior-mode {
+  font-size: var(--font-size-large);
+  letter-spacing: 0.02em;
+}
+
+/* Large accessible touch targets */
+.touch-target {
+  min-height: var(--min-touch-target);
+  min-width: var(--min-touch-target);
+}
+
+/* Focus ring — WCAG 2.4.11 */
+*:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
+}
