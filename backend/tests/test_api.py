@@ -4,6 +4,16 @@ from app.main import app
 client = TestClient(app)
 
 
+def test_root_and_health_endpoints():
+    root_res = client.get("/")
+    assert root_res.status_code == 200
+    assert root_res.json()["message"] == "Backend is running"
+
+    health_res = client.get("/health")
+    assert health_res.status_code == 200
+    assert health_res.json()["status"] == "ok"
+
+
 def test_full_elder_care_circle_lifecycle():
     # 1. Create Elder Profile with 6-digit passcode
     create_res = client.post(

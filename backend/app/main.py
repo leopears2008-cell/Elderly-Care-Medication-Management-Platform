@@ -71,9 +71,14 @@ maps_service = GoogleMapsEmergencyService()
 calendar_service = GoogleCalendarService()
 
 
+@app.get("/")
+def home() -> dict:
+    return {"message": "Backend is running"}
+
+
 @app.get("/health")
-def health_check() -> dict:
-    return {"status": "healthy", "service": "sushrutacare-api"}
+def health() -> dict:
+    return {"status": "ok", "service": "sushrutacare-api"}
 
 
 @app.post("/api/v1/profiles", status_code=status.HTTP_201_CREATED)
