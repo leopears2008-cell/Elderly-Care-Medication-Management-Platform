@@ -24,7 +24,6 @@ jobs:
       SMTP_USER: ${{ secrets.SMTP_USER || '' }}
       SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD || '' }}
       ALLOWED_ORIGINS: http://localhost:3000
-      PYTHONPATH: .
 
     steps:
       - name: Checkout repository
@@ -38,13 +37,16 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
+        working-directory: ./backend
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
+          pip install -r requirements.txt
 
       - name: Run Pytest
-        working-directory: backend
-        run: pytest tests/ -v --tb=short
+        working-directory: ./backend
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -v --tb=short
 
   # ── Frontend: Lint + Build ───────────────────────────────────────────────────
   frontend-lint-build:
@@ -64,13 +66,13 @@ jobs:
           node-version: "20"
 
       - name: Install dependencies
-        working-directory: frontend
+        working-directory: ./frontend
         run: npm install
 
       - name: Run ESLint
-        working-directory: frontend
+        working-directory: ./frontend
         run: npm run lint
 
       - name: Build Next.js app
-        working-directory: frontend
+        working-directory: ./frontend
         run: npm run build
