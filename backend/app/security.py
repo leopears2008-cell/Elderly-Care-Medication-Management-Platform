@@ -3,10 +3,9 @@ from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError as JWTError
 from passlib.context import CryptContext
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 
 from app.config import get_settings
 
@@ -30,7 +29,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
     )
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    token = jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+    return token
 
 
 def decode_token(token: str) -> dict:
@@ -64,6 +66,17 @@ def get_current_user(
     return {"user_id": user_id, "email": payload.get("email"), "role": payload.get("role")}
 
 
-# ── Rate limiter ──────────────────────────────────────────────────────────────
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+# ── Rate limiter (with fallback if slowapi not installed) ────────────────────
+try:
+    from slowapi import Limiter
+    from slowapi.util import get_remote_address
+
+    limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+except ImportError:
+    class _DummyLimiter:
+        def limit(self, *args, **kwargs):
+            return lambda fn: fn
+
+    limiter = _DummyLimiter()
+
 auth_limiter_key = "3/minute"

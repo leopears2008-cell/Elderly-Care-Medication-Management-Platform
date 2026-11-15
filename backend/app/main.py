@@ -1,13 +1,10 @@
 import logging
 from contextlib import asynccontextmanager
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
 
 from app.config import get_settings
 from app.security import limiter
@@ -16,29 +13,43 @@ from app.routers import auth, medications, appointments, ai_assistant
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler()
+# Optional APScheduler support
+try:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    scheduler = AsyncIOScheduler()
+except ImportError:
+    scheduler = None
+
+# Optional SlowAPI support
+try:
+    from slowapi import _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    has_slowapi = True
+except ImportError:
+    has_slowapi = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting SushrutaCare AI backend...")
-    try:
-        from app.services.email_service import check_and_send_reminders
-        scheduler.add_job(
-            check_and_send_reminders,
-            trigger="interval",
-            minutes=10,
-            id="medication_reminders",
-            replace_existing=True,
-        )
-        scheduler.start()
-        logger.info("APScheduler started — reminder job every 10 minutes")
-    except Exception as e:
-        logger.error(f"Scheduler startup error: {e}")
+    if scheduler is not None:
+        try:
+            from app.services.email_service import check_and_send_reminders
+            scheduler.add_job(
+                check_and_send_reminders,
+                trigger="interval",
+                minutes=10,
+                id="medication_reminders",
+                replace_existing=True,
+            )
+            scheduler.start()
+            logger.info("APScheduler started — reminder job every 10 minutes")
+        except Exception as e:
+            logger.error(f"Scheduler startup error: {e}")
     yield
     # Shutdown
-    if scheduler.running:
+    if scheduler is not None and getattr(scheduler, "running", False):
         scheduler.shutdown(wait=False)
     logger.info("SushrutaCare AI backend stopped")
 
@@ -52,9 +63,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Rate limiter
+# Rate limiter setup
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+if has_slowapi:
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS
 app.add_middleware(

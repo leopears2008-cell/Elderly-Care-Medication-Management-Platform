@@ -1,9 +1,7 @@
+import asyncio
 import json
 import logging
-from typing import Optional
-
-import google.generativeai as genai
-from google.generativeai.types import HarmBlockThreshold, HarmCategory
+from typing import List, Optional
 
 from app.config import get_settings
 
@@ -12,26 +10,46 @@ logger = logging.getLogger(__name__)
 
 class GeminiService:
     def __init__(self):
-        settings = get_settings()
-        genai.configure(api_key=settings.gemini_api_key)
-        self.model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            generation_config=genai.GenerationConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-            safety_settings={
-                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            },
-        )
+        self.settings = get_settings()
+        self._client = None
+        self._legacy_model = None
+        self._init_client()
+
+    def _init_client(self):
+        # Prefer new google-genai SDK
+        try:
+            from google import genai
+            self._client = genai.Client(api_key=self.settings.gemini_api_key)
+            logger.info("Using google-genai SDK client")
+            return
+        except ImportError:
+            pass
+
+        # Fallback to legacy google-generativeai SDK
+        try:
+            import google.generativeai as legacy_genai
+            from google.generativeai.types import HarmBlockThreshold, HarmCategory
+
+            legacy_genai.configure(api_key=self.settings.gemini_api_key)
+            self._legacy_model = legacy_genai.GenerativeModel(
+                model_name="gemini-2.5-flash",
+                generation_config=legacy_genai.GenerationConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                ),
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                },
+            )
+            logger.info("Using legacy google-generativeai SDK model")
+        except ImportError:
+            logger.warning("No Google GenAI SDK available. Gemini requests will return mock/fallback responses.")
 
     async def scan_prescription(self, image_bytes: bytes, mime_type: str) -> dict:
         """Extract medication information from a prescription image."""
-        import asyncio
-
         prompt = """Analyze this prescription image and extract all medication information.
 Return a JSON object with this exact structure:
 {
@@ -52,16 +70,41 @@ Return a JSON object with this exact structure:
 If no medications are found, return {"medications": [], "raw_text": "", "confidence": 0.0}
 Respond ONLY with valid JSON."""
 
-        image_part = {"mime_type": mime_type, "data": image_bytes}
-
         try:
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.model.generate_content([prompt, image_part]),
-            )
-            text = response.text.strip()
-            # Strip markdown code fences if present
+
+            if self._client is not None:
+                from google.genai import types
+
+                part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+                config = types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                )
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=[prompt, part],
+                        config=config,
+                    ),
+                )
+                raw_response = response.text
+            elif self._legacy_model is not None:
+                image_part = {"mime_type": mime_type, "data": image_bytes}
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._legacy_model.generate_content([prompt, image_part]),
+                )
+                raw_response = response.text
+            else:
+                return {
+                    "medications": [],
+                    "raw_text": "AI SDK not configured",
+                    "confidence": 0.0,
+                }
+
+            text = raw_response.strip()
             if text.startswith("```"):
                 text = text.split("```")[1]
                 if text.startswith("json"):
@@ -74,10 +117,8 @@ Respond ONLY with valid JSON."""
             logger.error(f"Gemini prescription scan error: {e}")
             raise
 
-    async def check_drug_interactions(self, medications: list[str]) -> dict:
+    async def check_drug_interactions(self, medications: List[str]) -> dict:
         """Check for drug interactions between medications."""
-        import asyncio
-
         meds_list = ", ".join(medications)
         prompt = f"""You are a clinical pharmacology expert. Analyze potential drug interactions between: {meds_list}
 
@@ -105,11 +146,38 @@ Respond ONLY with valid JSON."""
 
         try:
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.model.generate_content(prompt),
-            )
-            text = response.text.strip()
+
+            if self._client is not None:
+                from google.genai import types
+
+                config = types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                )
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=prompt,
+                        config=config,
+                    ),
+                )
+                raw_response = response.text
+            elif self._legacy_model is not None:
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._legacy_model.generate_content(prompt),
+                )
+                raw_response = response.text
+            else:
+                return {
+                    "interactions": [],
+                    "severity": "none",
+                    "recommendations": ["AI SDK not configured."],
+                    "disclaimer": "This is AI-generated information. Always consult a pharmacist or doctor.",
+                }
+
+            text = raw_response.strip()
             if text.startswith("```"):
                 text = text.split("```")[1]
                 if text.startswith("json"):
