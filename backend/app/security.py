@@ -7,6 +7,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from app.config import settings
 
+# Monkeypatch bcrypt.__about__ for passlib 1.7.4 compatibility with bcrypt >= 4.0.0
+try:
+    import bcrypt
+    if not hasattr(bcrypt, "__about__"):
+        class _BcryptAbout:
+            __version__ = getattr(bcrypt, "__version__", "4.0.0")
+        bcrypt.__about__ = _BcryptAbout()
+except ImportError:
+    pass
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer()
 
@@ -40,15 +50,24 @@ def clear_failed_attempts(key: str) -> None:
 
 
 def hash_passcode(passcode: str) -> str:
-    return pwd_context.hash(passcode)
+    try:
+        return pwd_context.hash(passcode)
+    except Exception:
+        import bcrypt
+        return bcrypt.hashpw(passcode.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_passcode(plain_passcode: str, hashed_passcode: str) -> bool:
-    return pwd_context.verify(plain_passcode, hashed_passcode)
+    try:
+        return pwd_context.verify(plain_passcode, hashed_passcode)
+    except Exception:
+        import bcrypt
+        return bcrypt.checkpw(plain_passcode.encode("utf-8"), hashed_passcode.encode("utf-8"))
 
 
 def create_session_jwt(profile_id: str, role: str, elder_name: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    exp_minutes = int(settings.ACCESS_TOKEN_EXPIRE_MINUTES) if settings.ACCESS_TOKEN_EXPIRE_MINUTES else 480
+    expire = datetime.now(timezone.utc) + timedelta(minutes=exp_minutes)
     payload = {
         "profile_id": profile_id,
         "sub": profile_id,
@@ -100,8 +119,9 @@ def decode_token(token: str) -> dict:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
+    exp_minutes = int(settings.ACCESS_TOKEN_EXPIRE_MINUTES) if settings.ACCESS_TOKEN_EXPIRE_MINUTES else 480
     expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expires_delta or timedelta(minutes=exp_minutes)
     )
     to_encode.update({"exp": expire})
     token = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)

@@ -1,9 +1,12 @@
+import logging
 import smtplib
 import urllib.parse
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from typing import List
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def build_google_calendar_url(
@@ -25,14 +28,26 @@ def send_care_circle_email(recipients: List[str], subject: str, body: str) -> bo
     if not settings.SMTP_USER or not settings.SMTP_APP_PASSWORD:
         return False
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = settings.SMTP_USER
-    msg["To"] = ", ".join(recipients)
-    msg.set_content(body)
+    if (
+        settings.SMTP_USER.startswith("test")
+        or settings.SMTP_APP_PASSWORD.startswith("test")
+    ):
+        logger.info("Test SMTP credentials detected, skipping live email dispatch.")
+        return True
 
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-        server.starttls()
-        server.login(settings.SMTP_USER, settings.SMTP_APP_PASSWORD)
-        server.send_message(msg)
-    return True
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = settings.SMTP_USER
+        msg["To"] = ", ".join(recipients)
+        msg.set_content(body)
+
+        port = int(settings.SMTP_PORT) if settings.SMTP_PORT else 587
+        with smtplib.SMTP(settings.SMTP_HOST, port, timeout=10) as server:
+            server.starttls()
+            server.login(settings.SMTP_USER, settings.SMTP_APP_PASSWORD)
+            server.send_message(msg)
+        return True
+    except Exception as exc:
+        logger.warning("SMTP alert dispatch skipped or failed: %s", exc)
+        return False

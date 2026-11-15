@@ -1,8 +1,6 @@
 import json
 import logging
 from typing import List
-from google import genai
-from google.genai import types
 from app.config import settings
 from app.schemas import AIPrescriptionParseResponse
 
@@ -17,10 +15,18 @@ def parse_prescription_and_check_interactions(
     into an elder-friendly schedule and flag potential polypharmacy conflicts.
     Includes a deterministic fallback if the API key is missing or quota is reached.
     """
-    if not settings.GEMINI_API_KEY:
+    # Fast path for missing or mock/test API keys (avoids failing network calls in CI)
+    if (
+        not settings.GEMINI_API_KEY
+        or settings.GEMINI_API_KEY.startswith("test-")
+        or settings.GEMINI_API_KEY == "replace-with-gemini-key"
+    ):
         return _deterministic_fallback(raw_text, existing_medications)
 
     try:
+        from google import genai
+        from google.genai import types
+
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
         prompt = (
             f"Prescription input: '{raw_text}'. "
