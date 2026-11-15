@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_APP_PASSWORD: str = ""
-    ALLOWED_ORIGINS: str = "http://localhost:3000"
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,https://frontend-two-opal-22.vercel.app"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
