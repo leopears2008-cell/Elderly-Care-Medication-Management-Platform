@@ -1,13 +1,76 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Care Circle & Autonomy Types ──────────────────────────────────────────────
+RoleType = Literal["ELDER", "CARETAKER", "FAMILY"]
+AdherenceStatus = Literal["PENDING", "TAKEN", "SNOOZED", "MISSED"]
+
+
+class ProfileCreateRequest(BaseModel):
+    elder_name: str = Field(..., min_length=2, max_length=120)
+    age: int = Field(..., ge=40, le=130)
+    blood_group: Optional[str] = Field(default="O+", max_length=10)
+    passcode: str = Field(..., pattern=r"^\d{6}$", description="Exact 6-digit numeric passcode")
+    caregiver_emails: List[EmailStr] = Field(..., min_length=1)
+    preferred_language: str = Field(default="en-IN")
+
+
+class PasscodeLoginRequest(BaseModel):
+    profile_id: str
+    passcode: str = Field(..., pattern=r"^\d{6}$")
+    role: RoleType
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    profile_id: str
+    elder_name: str
+    role: RoleType
+
+
+class MedicationCreateRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=150)
+    dosage: str = Field(..., min_length=1, max_length=80)
+    scheduled_time: str = Field(..., pattern=r"^([01]\d|2[0-3]):([0-5]\d)$")
+    instructions: str = Field(..., min_length=3, max_length=500)
+    stock_remaining: int = Field(default=30, ge=0, le=1000)
+
+
+class AdherenceUpdateRequest(BaseModel):
+    status: AdherenceStatus
+    elder_note: Optional[str] = Field(default=None, max_length=300)
+
+
+class AppointmentCreateRequest(BaseModel):
+    doctor_name: str = Field(..., min_length=2, max_length=120)
+    specialty: str = Field(..., min_length=2, max_length=100)
+    appointment_time: datetime
+    location: str = Field(..., min_length=3, max_length=300)
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+
+class AIPrescriptionParseRequest(BaseModel):
+    raw_prescription_text: str = Field(..., min_length=5, max_length=2000)
+    existing_medications: List[str] = Field(default_factory=list)
+
+
+class AIPrescriptionParseResponse(BaseModel):
+    medication_name: str
+    dosage: str
+    scheduled_time: str
+    elder_friendly_summary: str
+    interaction_warning: Optional[str] = None
+    ai_source: Literal["gemini-2.5-flash", "deterministic-fallback"]
+
+
+# ── Classic User Auth Models ──────────────────────────────────────────────────
 class UserCreate(BaseModel):
     model_config = {"strict": True}
 
@@ -99,7 +162,7 @@ class MedicationResponse(BaseModel):
 class AdherenceLog(BaseModel):
     medication_id: UUID
     scheduled_time: datetime
-    status: str = Field(..., pattern="^(taken|missed)$")
+    status: str = Field(..., pattern="^(taken|missed|snoozed)$")
     notes: Optional[str] = Field(None, max_length=300)
 
 
