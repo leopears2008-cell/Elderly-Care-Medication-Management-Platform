@@ -48,16 +48,18 @@ app = FastAPI(
     description="Passcode-secured Care Circle API with Google Gemini 2.5 Flash, Firebase, Google Calendar & Google Maps.",
 )
 
-cors_origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
-if "https://frontend-two-opal-22.vercel.app" not in cors_origins:
-    cors_origins.append("https://frontend-two-opal-22.vercel.app")
+# Allowed browser origins come from the ALLOWED_ORIGINS env var (comma separated, no trailing slash).
+cors_origins = [o.strip().rstrip("/") for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Production URL plus this project's Vercel preview deployments only.
+    allow_origin_regex=r"https://frontend-two-opal-22(-[a-z0-9-]+)?\.vercel\.app",
+    # The frontend authenticates with a Bearer token, not cookies.
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # In-memory store mirrored with Supabase adapter so local & CI tests run with zero external flakiness
@@ -184,7 +186,7 @@ def update_adherence_status(
     log_item["actioned_at"] = datetime.now(timezone.utc).isoformat()
 
     profile = PROFILES_STORE[session["profile_id"]]
-    
+
     # Sync with Firebase Firestore Care Sync
     firebase_sync.sync_adherence_to_firestore(
         profile_id=session["profile_id"],
