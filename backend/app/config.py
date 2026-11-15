@@ -1,33 +1,63 @@
-from pydantic_settings import BaseSettings
 from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Supabase
-    supabase_url: str
-    supabase_key: str
+    SUPABASE_URL: str = "https://example.supabase.co"
+    SUPABASE_SERVICE_ROLE_KEY: str = "replace-with-service-role-key"
+    JWT_SECRET_KEY: str = "change-this-32-char-secret-key-in-prod"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
+    GEMINI_API_KEY: str = ""
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_APP_PASSWORD: str = ""
+    ALLOWED_ORIGINS: str = "http://localhost:3000"
 
-    # Gemini
-    gemini_api_key: str
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # JWT
-    jwt_secret_key: str
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
+    # Lowercase property aliases for backward compatibility across modules
+    @property
+    def supabase_url(self) -> str:
+        return self.SUPABASE_URL
 
-    # Gmail
-    gmail_sender: str
-    gmail_app_password: str
+    @property
+    def supabase_key(self) -> str:
+        return self.SUPABASE_SERVICE_ROLE_KEY
 
-    # App
-    frontend_url: str = "http://localhost:3000"
-    environment: str = "development"
+    @property
+    def jwt_secret_key(self) -> str:
+        return self.JWT_SECRET_KEY
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    @property
+    def jwt_algorithm(self) -> str:
+        return self.JWT_ALGORITHM
+
+    @property
+    def access_token_expire_minutes(self) -> int:
+        return self.ACCESS_TOKEN_EXPIRE_MINUTES
+
+    @property
+    def gemini_api_key(self) -> str:
+        return self.GEMINI_API_KEY
+
+    @property
+    def gmail_sender(self) -> str:
+        return self.SMTP_USER
+
+    @property
+    def gmail_app_password(self) -> str:
+        return self.SMTP_APP_PASSWORD
+
+    @property
+    def frontend_url(self) -> str:
+        return self.ALLOWED_ORIGINS
+
+
+settings = Settings()
 
 
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings()
+    return settings
