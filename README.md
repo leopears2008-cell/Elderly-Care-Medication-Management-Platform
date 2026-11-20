@@ -190,3 +190,5 @@ ALLOWED_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
 ## 📄 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+#   S c h e m e - L o c a l  
+ 
